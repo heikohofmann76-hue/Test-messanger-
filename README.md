@@ -20,6 +20,25 @@ Andere Geräte im WLAN erreichen die App über `http://<IP-deines-PCs>:3000`.
 Mikrofon (Sprachnachrichten) und „App installieren“ funktionieren auf Handys nur über **HTTPS**,
 z. B. hinter einem Reverse-Proxy wie Caddy oder über einen Hoster (Render, Fly.io, eigener Server).
 
+## Online stellen und aufs iPhone laden
+
+Fürs iPhone muss die App einmal unter **HTTPS** im Internet erreichbar sein. Am einfachsten über
+[Render](https://render.com) – das Repo enthält dafür eine fertige Konfiguration (`render.yaml`):
+
+1. Render-Konto anlegen und GitHub verbinden.
+2. **New + → Blueprint →** dieses Repo wählen. Render richtet den Dienst automatisch ein
+   (ohne Blueprint: **New + → Web Service**, Start-Befehl `npm start`).
+3. Du bekommst eine Adresse wie `https://krypto-messenger.onrender.com`.
+4. Diese Adresse auf dem iPhone in **Safari** öffnen, Konto anlegen, dann
+   **Teilen → „Zum Home-Bildschirm“**. Fertig – die App liegt als Icon auf dem iPhone.
+
+Gratis-Tarif: Der Dienst schläft bei Leerlauf ein und `data.json` wird bei jedem Deploy
+zurückgesetzt. Für Dauerbetrieb einen Tarif mit „Disk“ wählen und `DATA_FILE` dorthin legen.
+
+Eine echte App aus dem App Store braucht einen Apple-Developer-Account, einen Mac und eine
+Verpackung mit [Capacitor](https://capacitorjs.com). Die Safari-Variante oben reicht zum
+Benutzen und Testen völlig.
+
 ## Funktionen
 
 - Einzelchats und Gruppen

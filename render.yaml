@@ -1,0 +1,35 @@
+# Render-Blueprint: stellt den Krypto-Messenger mit HTTPS online.
+#
+# So nutzt du es:
+# 1. Konto auf https://render.com anlegen und GitHub verbinden.
+# 2. "New +" -> "Blueprint" -> dieses Repo (Test-messanger-) wählen.
+#    Render liest diese Datei und richtet den Dienst automatisch ein.
+#    (Alternativ ohne Blueprint: "New +" -> "Web Service", Start-Befehl `npm start`.)
+# 3. Nach dem Deploy bekommst du eine HTTPS-Adresse wie
+#    https://krypto-messenger.onrender.com – die auf dem iPhone in Safari öffnen
+#    und über Teilen -> "Zum Home-Bildschirm" installieren.
+#
+# Hinweis zum Gratis-Tarif: Der Dienst schläft nach Leerlauf ein (erster Aufruf
+# dauert dann ein paar Sekunden), und die Festplatte ist nicht dauerhaft – die
+# Datei data.json wird bei jedem Deploy zurückgesetzt. Zum Testen ist das in Ordnung.
+# Für dauerhaften Betrieb einen bezahlten Tarif mit "Disk" wählen und DATA_FILE
+# auf einen Pfad in diesem Disk zeigen lassen.
+#
+# WebSockets werden von Render unterstützt; es ist nichts weiter zu konfigurieren.
+
+services:
+  - type: web
+    name: krypto-messenger
+    runtime: node
+    plan: free
+    region: frankfurt          # EU-Region; bei Bedarf ändern (z. B. oregon)
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true           # bei jedem Push auf den Standard-Branch neu deployen
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # Hinter Renders HTTPS-Proxy: echte Besucher-IP für den Login-Verlauf auswerten.
+      - key: TRUST_PROXY
+        value: "1"
