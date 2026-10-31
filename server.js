@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
+const geoip = require('./geoip');
 
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data.json');
@@ -59,20 +60,37 @@ function deliverOrQueue(name, obj) {
 }
 const validName = (n) => typeof n === 'string' && /^[a-zA-Z0-9_.\-äöüÄÖÜß]{3,24}$/.test(n);
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
   let me = null;
+  const ip = geoip.clientIp(req);
+
+  // Ungefähre Region dieser Anmeldung ermitteln und in der Login-Historie des Nutzers
+  // ablegen (nur für den Nutzer selbst sichtbar). Blockiert die Anmeldung nicht.
+  const recordLogin = async (name) => {
+    try {
+      const { region, ip: masked } = await geoip.locate(ip);
+      const u = db.users[name];
+      if (!u) return;
+      u.logins = (u.logins || []);
+      u.logins.unshift({ ts: Date.now(), region, ip: masked });
+      u.logins = u.logins.slice(0, 10);
+      save();
+      send(ws, { t: 'logins', logins: u.logins });
+    } catch {}
+  };
 
   const login = (name) => {
     me = name;
     if (!online.has(name)) online.set(name, new Set());
     online.get(name).add(ws);
     const groups = Object.values(db.groups).filter((g) => g.members.includes(name));
-    send(ws, { t: 'authed', name, groups, opkCount: db.users[name].opks?.length || 0 });
+    send(ws, { t: 'authed', name, groups, opkCount: db.users[name].opks?.length || 0, logins: db.users[name].logins || [] });
     const q = db.queue[name] || [];
     delete db.queue[name];
     save();
     q.forEach((m) => send(ws, m));
     broadcast({ t: 'presence', name, online: true });
+    recordLogin(name);
   };
 
   ws.on('message', (raw) => {

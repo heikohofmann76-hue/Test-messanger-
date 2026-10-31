@@ -32,6 +32,7 @@ z. B. hinter einem Reverse-Proxy wie Caddy oder über einen Hoster (Render, Fly.
 - Hell- und Dunkelmodus, Handy- und Desktop-Layout
 - Offline-Zustellung: der Server hält verschlüsselte Nachrichten, bis der Empfänger online ist
 - Sicherheitsnummer zum Prüfen der Verschlüsselung, Warnung bei Schlüsselwechsel
+- Login-Verlauf: ungefähre Region (Land/Stadt) der letzten Anmeldungen am eigenen Konto, als Login-Warnung
 
 ## Verschlüsselung
 
@@ -75,6 +76,7 @@ DMA-Zugang bei Meta beantragen, sobald es ein Unternehmen hinter der App gibt.
 
 ```
 server.js          Relay-Server (HTTP + WebSocket), speichert in data.json
+geoip.js           Grobe Standortbestimmung der Login-IP (für den Login-Verlauf)
 public/index.html  Oberfläche
 public/style.css   Design (hell/dunkel, mobil)
 public/app.js      Client: Krypto, Speicher, Chat-Logik
