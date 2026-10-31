@@ -170,6 +170,7 @@ async function handle(m) {
       showApp(); break;
     case 'prekeys_low': topUpPrekeys(); break;
     case 'logins': S.logins = m.logins || []; break;
+    case 'signal': P2P.handleSignal(m.from, m.data); break;
     case 'autherror':
       $('#authError').textContent = 'Anmeldung fehlgeschlagen. Bitte neues Konto erstellen.';
       await idb.set('account', null); await idb.set('identity', null); showAuth(); break;
@@ -280,15 +281,22 @@ function recipientsOf(chatId) {
   return (S.groups[chat.target]?.members || []).filter((n) => n !== S.name);
 }
 
-async function sendPayload(chatId, payload, msgId = uid()) {
+async function sendPayload(chatId, payload, msgId = uid(), ts = Date.now()) {
   const chat = S.chats[chatId];
   if (chat.type === 'g') payload.g = chat.target;
-  const envs = {};
+  const wsEnvs = {}; // für Empfänger ohne offene P2P-Verbindung: über den Server (Fallback / offline)
+  let viaP2P = false;
   for (const n of recipientsOf(chatId)) {
     const c = await ensureContact(n);
-    if (c) try { envs[n] = await ratchet.encrypt(n, payload); } catch (e) { console.warn('Verschlüsselung für', n, 'fehlgeschlagen', e.message); }
+    if (!c) continue;
+    let env;
+    try { env = await ratchet.encrypt(n, payload); } catch (e) { console.warn('Verschlüsselung für', n, 'fehlgeschlagen', e.message); continue; }
+    // Erst direkt per WebRTC versuchen, sonst über den Server.
+    if (P2P.supported && P2P.send(n, { t: 'msg', id: msgId, ts, env })) viaP2P = true;
+    else { wsEnvs[n] = env; if (P2P.supported) P2P.connect(n); } // Verbindung für die nächste Nachricht anbahnen
   }
-  if (Object.keys(envs).length) wsSend({ t: 'send', id: msgId, envs });
+  if (Object.keys(wsEnvs).length) wsSend({ t: 'send', id: msgId, envs: wsEnvs });
+  else if (viaP2P) handle({ t: 'ack', id: msgId, ts }); // kein Server-Ack bei reinem P2P → lokal bestätigen
   return msgId;
 }
 
@@ -302,7 +310,7 @@ async function sendMessage(payload) {
   (S.msgs[chatId] ||= []).push(msg);
   S.chats[chatId].last = { ts: msg.ts, preview: preview(msg), from: S.name };
   appendMsg(msg); renderList(); persist();
-  await sendPayload(chatId, { ...payload }, id);
+  await sendPayload(chatId, { ...payload }, id, msg.ts);
 }
 
 function markRead(chatId) {
@@ -441,8 +449,9 @@ function renderHeader() {
   if (chat.typing) { sub.textContent = (chat.type === 'g' ? chat.typing + ' ' : '') + 'schreibt…'; sub.classList.add('typing'); }
   else {
     sub.classList.remove('typing');
-    sub.textContent = chat.type === 'g' ? (S.groups[chat.target]?.members || []).map((n) => n === S.name ? 'Du' : n).join(', ')
-      : (S.contacts[chat.target]?.keyChanged ? '⚠️ Sicherheitsnummer hat sich geändert' : lastSeenText(S.contacts[chat.target]));
+    if (chat.type === 'g') sub.textContent = (S.groups[chat.target]?.members || []).map((n) => n === S.name ? 'Du' : n).join(', ');
+    else if (S.contacts[chat.target]?.keyChanged) sub.textContent = '⚠️ Sicherheitsnummer hat sich geändert';
+    else sub.textContent = (chat.p2p ? '🔗 direkt verbunden · ' : '') + lastSeenText(S.contacts[chat.target]);
   }
 }
 
@@ -453,6 +462,8 @@ async function openChat(chatId) {
   $('#app').classList.add('in-chat');
   renderHeader(); renderMessages(); markRead(chatId);
   const chat = S.chats[chatId];
+  // P2P-Verbindung(en) für diesen Chat anbahnen, damit folgende Nachrichten direkt laufen.
+  if (P2P.supported) recipientsOf(chatId).forEach((n) => P2P.connect(n));
   const left = chat.type === 'g' && !S.groups[chat.target]?.members.includes(S.name);
   $('.composer').classList.toggle('hidden', !!left);
   if (matchMedia('(min-width:761px)').matches) $('#input').focus();
@@ -710,7 +721,23 @@ async function showApp() {
   $('#auth').classList.add('hidden'); $('#app').classList.remove('hidden');
   $('#meAvatar').style.background = colorOf(S.name); $('#meAvatar').textContent = initials(S.name);
   $('#meAvatar').title = S.name;
+  setupP2P();
   renderList(); renderStatusList(); updateSendBtn();
+}
+
+// WebRTC-Transport einrichten: Nachrichten gehen direkt zum Partner, der Server ist nur Signaling + Fallback.
+function setupP2P() {
+  if (!P2P.supported || P2P.ready) return;
+  P2P.ready = true;
+  P2P.init({
+    me: S.name,
+    sendSignal: (to, data) => wsSend({ t: 'signal', to, data }),
+    onEnvelope: (e) => onIncoming({ t: 'msg', ...e }),
+    onState: (name, connected) => {
+      const chat = S.chats['u:' + name];
+      if (chat) { chat.p2p = connected; if (S.current === chat.id) renderHeader(); }
+    },
+  });
 }
 
 async function boot() {

@@ -51,6 +51,24 @@ Die App nutzt ein Signal-artiges Protokoll (`public/signal.js`), umgesetzt mit W
 - **Gruppen:** die Nachricht wird für jedes Mitglied einzeln über dessen Sitzung verschlüsselt.
 - Der Server sieht nur, wer wem wann wie viel schickt. Keinen Inhalt, keine Medien, keinen Status.
 
+## Peer-to-Peer (serverarm)
+
+Nachrichten laufen, wann immer möglich, **direkt zwischen den Geräten** über WebRTC-DataChannels
+(`public/p2p.js`). Der Server ist dann nur noch für zwei kleine Dinge zuständig:
+
+- **Signaling:** die beiden Geräte tauschen über ihn einmalig Verbindungsdaten aus (Verbindungsaufbau
+  nach dem „Perfect Negotiation"-Muster). Danach fließt der Nachrichtenverkehr am Server vorbei.
+- **Fallback / Offline:** ist der Partner offline oder kommt keine direkte Verbindung zustande, geht die
+  Nachricht über den Server und wird dort verschlüsselt zwischengespeichert, bis der Partner online ist.
+
+Das senkt Serverlast und -kosten deutlich, ohne die App unbrauchbar zu machen. Die Ende-zu-Ende-
+Verschlüsselung liegt unabhängig vom Transportweg darüber, also sieht auch der Fallback nur Chiffretext.
+
+STUN ist kostenlos (Google-Server sind voreingestellt). TURN (nur selten nötig, hinter strengen
+Firewalls) lässt sich optional über `window.MESSENGER_ICE` ergänzen. Ein echter serverloser Betrieb
+(jeder Client ist vollwertiger Server) ist nur mit einer installierten Desktop-/Handy-App möglich,
+nicht im Browser, weil Browser keine eingehenden Verbindungen annehmen.
+
 Unterschied zum echten Signal-Protokoll: P-256 statt Curve25519 (in allen Browsern ohne Bibliothek
 verfügbar) und AES-GCM statt AES-CBC+HMAC. Die Krypto-Logik ist mit einer Testreihe abgedeckt
 (beide Richtungen, vertauschte Reihenfolge, abgelehnte Wiederholung, erkannte Manipulation).
@@ -77,6 +95,7 @@ DMA-Zugang bei Meta beantragen, sobald es ein Unternehmen hinter der App gibt.
 ```
 server.js          Relay-Server (HTTP + WebSocket), speichert in data.json
 geoip.js           Grobe Standortbestimmung der Login-IP (für den Login-Verlauf)
+public/p2p.js      WebRTC-Transport: direkte Verbindung Gerät-zu-Gerät, Server nur Fallback
 public/index.html  Oberfläche
 public/style.css   Design (hell/dunkel, mobil)
 public/app.js      Client: Krypto, Speicher, Chat-Logik
