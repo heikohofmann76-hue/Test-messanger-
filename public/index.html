@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b8f6a">
+<title>Krypto-Messenger</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- Anmeldung -->
+<section id="auth" class="auth hidden">
+  <div class="auth-card">
+    <div class="logo"><svg viewBox="0 0 24 24"><path d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm-3 8V7a3 3 0 0 1 6 0v3H9z"/></svg></div>
+    <h1>Krypto-Messenger</h1>
+    <p class="muted">Ende-zu-Ende-verschlüsselt. Dein privater Schlüssel wird auf diesem Gerät erzeugt und verlässt es nie.</p>
+    <form id="authForm">
+      <input id="authName" placeholder="Benutzername wählen" autocomplete="off" maxlength="24" required>
+      <button class="btn primary" type="submit">Konto erstellen</button>
+    </form>
+    <p id="authError" class="error"></p>
+  </div>
+</section>
+
+<!-- App -->
+<section id="app" class="app hidden">
+  <aside class="sidebar">
+    <header class="side-head">
+      <button class="avatar me" id="meAvatar" title="Profil"></button>
+      <div class="grow"></div>
+      <button class="icon" id="btnNewGroup" title="Neue Gruppe"><svg viewBox="0 0 24 24"><path d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm0 2c-2.7 0-8 1.3-8 4v3h10v-3c0-1 .4-1.9 1.1-2.6C10 13.2 8.8 13 8 13zm8 0c-.5 0-1 0-1.6.1 1 .8 1.6 1.7 1.6 2.9v3h8v-3c0-2.7-5.3-4-8-4z"/></svg></button>
+      <button class="icon" id="btnNewChat" title="Neuer Chat"><svg viewBox="0 0 24 24"><path d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-3 9h-4v4h-2v-4H7V9h4V5h2v4h4v2z"/></svg></button>
+      <button class="icon" id="btnTheme" title="Hell/Dunkel"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9c0-.5 0-1-.1-1.4A5.5 5.5 0 0 1 13.4 3.1 9 9 0 0 0 12 3z"/></svg></button>
+    </header>
+    <nav class="tabs">
+      <button class="tab active" data-tab="chats">Chats</button>
+      <button class="tab" data-tab="status">Status</button>
+    </nav>
+    <div class="search"><input id="search" placeholder="Suchen oder neuen Chat beginnen"></div>
+    <div id="chatList" class="list"></div>
+    <div id="statusList" class="list hidden"></div>
+  </aside>
+
+  <main class="main">
+    <div id="empty" class="empty">
+      <div class="empty-inner">
+        <div class="logo big"><svg viewBox="0 0 24 24"><path d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm-3 8V7a3 3 0 0 1 6 0v3H9z"/></svg></div>
+        <h2>Krypto-Messenger</h2>
+        <p class="muted">Wähle einen Chat oder starte einen neuen.</p>
+        <p class="muted small">🔒 Deine Nachrichten sind Ende-zu-Ende-verschlüsselt.</p>
+      </div>
+    </div>
+
+    <div id="conv" class="conv hidden">
+      <header class="conv-head">
+        <button class="icon back" id="btnBack" title="Zurück"><svg viewBox="0 0 24 24"><path d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z"/></svg></button>
+        <div class="avatar" id="convAvatar"></div>
+        <div class="conv-title" id="convInfoBtn">
+          <div id="convName" class="name"></div>
+          <div id="convSub" class="sub"></div>
+        </div>
+        <button class="icon" id="btnSafety" title="Verschlüsselung prüfen"><svg viewBox="0 0 24 24"><path d="M12 1 3 5v6c0 5.5 3.8 10.7 9 12 5.2-1.3 9-6.5 9-12V5l-9-4zm-2 16-4-4 1.4-1.4L10 14.2l6.6-6.6L18 9l-8 8z"/></svg></button>
+      </header>
+      <div id="messages" class="messages"></div>
+      <div id="replyBar" class="reply-bar hidden"><div id="replyText"></div><button class="icon" id="replyCancel">✕</button></div>
+      <div id="emojiPanel" class="emoji-panel hidden"></div>
+      <footer class="composer">
+        <button class="icon" id="btnEmoji" title="Emoji">😊</button>
+        <label class="icon" title="Datei/Bild anhängen"><svg viewBox="0 0 24 24"><path d="M16.5 6v11.5a4 4 0 0 1-8 0V5a2.5 2.5 0 0 1 5 0v10.5a1 1 0 0 1-2 0V6H10v9.5a2.5 2.5 0 0 0 5 0V5a4 4 0 0 0-8 0v12.5a5.5 5.5 0 0 0 11 0V6h-1.5z"/></svg><input type="file" id="fileInput" hidden></label>
+        <div id="recBar" class="rec-bar hidden"><span class="dot"></span><span id="recTime">0:00</span><button class="link" id="recCancel">Abbrechen</button></div>
+        <textarea id="input" rows="1" placeholder="Nachricht"></textarea>
+        <button class="icon round" id="btnSend" title="Senden"></button>
+      </footer>
+    </div>
+  </main>
+</section>
+
+<!-- Dialoge -->
+<div id="modal" class="modal hidden"><div class="modal-card" id="modalCard"></div></div>
+<div id="viewer" class="viewer hidden"></div>
+<div id="toast" class="toast hidden"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

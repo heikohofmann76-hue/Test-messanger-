@@ -1,0 +1,144 @@
+<meta charset="utf-8">
+<title>Krypto-Messenger Demo</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: zwei Handys nebeneinander, rechts das, was der Server sieht */
+:root{
+  --bg:#e9efec; --fg:#10201a; --muted:#5b6f67; --accent:#0b8f6a; --panel:#ffffff; --line:#d3ded9;
+  --log-bg:#0f1714; --log-fg:#b7f5d8; --log-dim:#5f8a77; --phone:#1b2420;
+  --display:"Figtree",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0b1210; --fg:#e4efe9; --muted:#8aa198; --panel:#131d19; --line:#24332d; --phone:#000; color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0b1210; --fg:#e4efe9; --muted:#8aa198; --panel:#131d19; --line:#24332d; --phone:#000; color-scheme:dark}
+html,body{height:auto}
+body{background:var(--bg);color:var(--fg);font-family:var(--display);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:24px}
+.wrap{max-width:1280px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+header{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:12px}
+h1{margin:0;font-size:clamp(24px,3.4vw,36px);font-weight:800;letter-spacing:-.02em;text-wrap:balance}
+h1 span{color:var(--accent)}
+.lede{margin:6px 0 0;color:var(--muted);max-width:62ch;line-height:1.5}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+button.b{font:600 14px var(--display);border:1px solid var(--line);background:var(--panel);color:var(--fg);padding:10px 14px;border-radius:10px;cursor:pointer}
+button.b.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.b:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.stage{display:grid;grid-template-columns:repeat(2,minmax(0,390px)) minmax(0,1fr);gap:20px;align-items:start}
+.phone{display:flex;flex-direction:column;gap:8px;min-width:0}
+.phone .label{font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.phone .frame{background:var(--phone);padding:10px;border-radius:34px;box-shadow:0 20px 50px rgba(0,0,0,.18)}
+.phone iframe{display:block;width:100%;height:700px;border:0;border-radius:26px;background:#fff}
+.log{background:var(--log-bg);color:var(--log-fg);border-radius:16px;padding:16px;font:12px/1.55 var(--mono);height:720px;overflow:auto;min-width:0;display:flex;flex-direction:column;gap:10px}
+.log h2{font:600 13px var(--display);margin:0;color:#fff;letter-spacing:.06em;text-transform:uppercase}
+.log p.hint{margin:0;color:var(--log-dim);font-family:var(--display);font-size:13px;line-height:1.45}
+.entry{border-top:1px solid #20302a;padding-top:8px;word-break:break-all}
+.entry .h{color:#fff}.entry .k{color:var(--log-dim)}
+@media (max-width:1100px){.stage{grid-template-columns:repeat(2,minmax(0,1fr))}.log{grid-column:1/-1;height:360px}}
+@media (max-width:720px){.stage{grid-template-columns:minmax(0,1fr)}.phone iframe{height:620px}}
+@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Krypto-Messenger <span>Demo</span></h1>
+      <p class="lede">Anna und Ben sind zwei getrennte Geräte mit eigenen Schlüsseln. Schreib in einem Handy, und die Nachricht kommt im anderen an. Rechts siehst du, was der Server zu sehen bekommt: nur verschlüsselte Daten.</p>
+    </div>
+    <div class="btns">
+      <button class="b primary" id="btnGroup">Gruppe mit Carla anlegen</button>
+      <button class="b" id="btnReset">Demo neu starten</button>
+    </div>
+  </header>
+  <div class="stage">
+    <div class="phone"><div class="label">Annas Handy</div><div class="frame"><iframe id="fa" title="Annas Handy"></iframe></div></div>
+    <div class="phone"><div class="label">Bens Handy</div><div class="frame"><iframe id="fb" title="Bens Handy"></iframe></div></div>
+    <section class="log" id="log" aria-live="polite">
+      <h2>Was der Server sieht</h2>
+      <p class="hint">Absender, Empfänger, Zeit und Chiffretext (AES-256-GCM). Den Inhalt kann der Server nicht lesen.</p>
+    </section>
+  </div>
+</div>
+
+<script>
+// ---- Demo-Server: gleiche Logik wie server.js, nur im Browser statt über WebSocket ----
+window.DemoServer = (() => {
+  let db, online;
+  const reset = () => { db = { users: {}, groups: {}, queue: {} }; online = new Map(); };
+  reset();
+  const out = (fn, obj) => setTimeout(() => fn(JSON.stringify(obj)), 120);
+  const toUser = (n, o) => { const s = online.get(n); if (s?.size) { s.forEach((f) => out(f, o)); return true; } return false; };
+  const deliver = (n, o) => { if (!toUser(n, o)) (db.queue[n] ||= []).push(o); };
+  const bc = (o) => online.forEach((s) => s.forEach((f) => out(f, o)));
+  const log = (html) => { const el = document.getElementById('log'); const d = document.createElement('div'); d.className = 'entry'; d.innerHTML = html; el.appendChild(d); el.scrollTop = el.scrollHeight; };
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  function connect(recv) {
+    let me = null;
+    const ws = { readyState: 1, onmessage: null, send(raw) {
+      const m = JSON.parse(raw);
+      const login = (n) => { me = n; if (!online.has(n)) online.set(n, new Set()); online.get(n).add(recv);
+        out(recv, { t: 'authed', name: n, groups: Object.values(db.groups).filter((g) => g.members.includes(n)) });
+        (db.queue[n] || []).forEach((x) => out(recv, x)); delete db.queue[n]; bc({ t: 'presence', name: n, online: true }); };
+      if (m.t === 'register') {
+        if (db.users[m.name]) return out(recv, { t: 'error', msg: 'Name ist schon vergeben' });
+        const token = crypto.randomUUID(); db.users[m.name] = { pub: m.pub, token, lastSeen: Date.now(), about: '' };
+        log(`<span class="h">Neues Konto: ${esc(m.name)}</span><br><span class="k">öffentlicher Schlüssel x=</span>${esc(m.pub.x.slice(0, 22))}…`);
+        out(recv, { t: 'registered', name: m.name, token }); return login(m.name);
+      }
+      if (m.t === 'auth') { const u = db.users[m.name]; return u && u.token === m.token ? login(m.name) : out(recv, { t: 'autherror' }); }
+      if (!me) return;
+      if (m.t === 'lookup') { const u = db.users[m.name]; return out(recv, u ? { t: 'user', name: m.name, pub: u.pub, about: u.about, online: online.has(m.name), lastSeen: u.lastSeen, rid: m.rid } : { t: 'nouser', name: m.name, rid: m.rid }); }
+      if (m.t === 'send') { const ts = Date.now();
+        Object.entries(m.envs || {}).forEach(([to, env]) => {
+          log(`<span class="h">${esc(me)} → ${esc(to)}</span> <span class="k">${new Date(ts).toLocaleTimeString('de-DE')}</span><br><span class="k">iv </span>${esc(env.iv)}<br><span class="k">ct </span>${esc(env.ct.slice(0, 140))}${env.ct.length > 140 ? '… (' + env.ct.length + ' Zeichen)' : ''}`);
+          deliver(to, { t: 'msg', from: me, id: m.id, ts, env }); });
+        return out(recv, { t: 'ack', id: m.id, ts }); }
+      if (m.t === 'receipt') return deliver(m.to, { t: 'receipt', from: me, ids: m.ids, state: m.state });
+      if (m.t === 'typing') return (m.to || []).forEach((n) => toUser(n, { t: 'typing', from: me, chat: m.chat }));
+      if (m.t === 'group_create') { const members = [...new Set([me, ...(m.members || [])])].filter((n) => db.users[n]);
+        const g = { id: crypto.randomUUID(), name: m.name, members, admin: me, created: Date.now() }; db.groups[g.id] = g;
+        log(`<span class="h">Gruppe „${esc(g.name)}“</span> <span class="k">Mitglieder:</span> ${esc(members.join(', '))}`);
+        return members.forEach((n) => deliver(n, { t: 'group', group: g })); }
+      if (m.t === 'group_leave') { const g = db.groups[m.id]; if (!g) return; g.members = g.members.filter((n) => n !== me); [...g.members, me].forEach((n) => deliver(n, { t: 'group', group: g })); }
+    } };
+    return ws;
+  }
+  return { connect, reset, register: (name, pub) => { db.users[name] = { pub, token: crypto.randomUUID(), lastSeen: Date.now() - 36e5, about: '' }; } };
+})();
+
+const fa = document.getElementById('fa'), fb = document.getElementById('fb');
+let carla = null;
+async function start() {
+  DemoServer.reset();
+  document.querySelectorAll('#log .entry').forEach((e) => e.remove());
+  if (carla) { carla.remove(); carla = null; }
+  const load = (f, u) => new Promise((r) => { f.onload = r; f.src = 'client.html?u=' + u + '&r=' + Math.random(); });
+  await Promise.all([load(fa, 'anna'), load(fb, 'ben')]);
+  await Promise.all([fa.contentWindow.demoReady, fb.contentWindow.demoReady]);
+  await fa.contentWindow.demoOpenChat('ben');
+  await fa.contentWindow.demoSend('Hallo Ben! 👋 Unser Chat ist Ende-zu-Ende-verschlüsselt.');
+  await new Promise((r) => setTimeout(r, 900));
+  await fb.contentWindow.demoOpenChat('anna');
+  await fb.contentWindow.demoSend('Hi Anna 🔒 Der Server sieht nur Zeichensalat. Schreib mir was!');
+}
+document.getElementById('btnReset').onclick = start;
+document.getElementById('btnGroup').onclick = async (e) => {
+  e.target.disabled = true;
+  if (!carla) {
+    carla = document.createElement('iframe'); carla.hidden = true; carla.title = 'Carla';
+    await new Promise((r) => { carla.onload = r; carla.src = 'client.html?u=carla&r=' + Math.random(); document.body.appendChild(carla); });
+    await carla.contentWindow.demoReady;
+  }
+  const w = fa.contentWindow;
+  await w.demoCreateGroup('Wochenende 🏕️', ['ben', 'carla']);
+  await new Promise((r) => setTimeout(r, 500));
+  await w.demoOpenGroup();
+  await w.demoSend('Wer ist Samstag beim Grillen dabei?');
+  await new Promise((r) => setTimeout(r, 1200));
+  await carla.contentWindow.demoOpenGroup();
+  await carla.contentWindow.demoSend('Ich bin dabei und bringe Salat mit 🥗');
+  await fb.contentWindow.demoOpenGroup();
+  e.target.disabled = false;
+};
+start();
+</script>
