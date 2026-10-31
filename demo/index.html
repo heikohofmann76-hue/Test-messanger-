@@ -77,20 +77,26 @@ window.DemoServer = (() => {
     const ws = { readyState: 1, onmessage: null, send(raw) {
       const m = JSON.parse(raw);
       const login = (n) => { me = n; if (!online.has(n)) online.set(n, new Set()); online.get(n).add(recv);
-        out(recv, { t: 'authed', name: n, groups: Object.values(db.groups).filter((g) => g.members.includes(n)) });
+        out(recv, { t: 'authed', name: n, groups: Object.values(db.groups).filter((g) => g.members.includes(n)), opkCount: db.users[n].opks.length });
         (db.queue[n] || []).forEach((x) => out(recv, x)); delete db.queue[n]; bc({ t: 'presence', name: n, online: true }); };
       if (m.t === 'register') {
         if (db.users[m.name]) return out(recv, { t: 'error', msg: 'Name ist schon vergeben' });
-        const token = crypto.randomUUID(); db.users[m.name] = { pub: m.pub, token, lastSeen: Date.now(), about: '' };
-        log(`<span class="h">Neues Konto: ${esc(m.name)}</span><br><span class="k">öffentlicher Schlüssel x=</span>${esc(m.pub.x.slice(0, 22))}…`);
+        const k = m.keys; const token = crypto.randomUUID();
+        db.users[m.name] = { pub: { ik: k.ik, sigPub: k.sigPub }, spk: k.spk, opks: k.opks.slice(), token, lastSeen: Date.now(), about: '' };
+        log(`<span class="h">Neues Konto: ${esc(m.name)}</span><br><span class="k">Identitätsschlüssel </span>${esc(k.ik.slice(0, 26))}…<br><span class="k">signierter Prekey + ${k.opks.length} Einmal-Prekeys</span>`);
         out(recv, { t: 'registered', name: m.name, token }); return login(m.name);
       }
       if (m.t === 'auth') { const u = db.users[m.name]; return u && u.token === m.token ? login(m.name) : out(recv, { t: 'autherror' }); }
       if (!me) return;
       if (m.t === 'lookup') { const u = db.users[m.name]; return out(recv, u ? { t: 'user', name: m.name, pub: u.pub, about: u.about, online: online.has(m.name), lastSeen: u.lastSeen, rid: m.rid } : { t: 'nouser', name: m.name, rid: m.rid }); }
+      if (m.t === 'bundle') { const u = db.users[m.name]; if (!u) return out(recv, { t: 'nobundle', rid: m.rid });
+        const opk = u.opks.shift() || null;
+        log(`<span class="h">Prekey-Bundle für ${esc(me)} → ${esc(m.name)}</span><br><span class="k">signierter Prekey${opk ? ' + 1 Einmal-Prekey (jetzt verbraucht)' : ''}</span>`);
+        return out(recv, { t: 'bundle', rid: m.rid, bundle: { ik: u.pub.ik, sigPub: u.pub.sigPub, spk: u.spk, opk } }); }
+      if (m.t === 'prekeys') { if (Array.isArray(m.opks)) db.users[me].opks.push(...m.opks); return; }
       if (m.t === 'send') { const ts = Date.now();
         Object.entries(m.envs || {}).forEach(([to, env]) => {
-          log(`<span class="h">${esc(me)} → ${esc(to)}</span> <span class="k">${new Date(ts).toLocaleTimeString('de-DE')}</span><br><span class="k">iv </span>${esc(env.iv)}<br><span class="k">ct </span>${esc(env.ct.slice(0, 140))}${env.ct.length > 140 ? '… (' + env.ct.length + ' Zeichen)' : ''}`);
+          log(`<span class="h">${esc(me)} → ${esc(to)}</span> <span class="k">${new Date(ts).toLocaleTimeString('de-DE')}</span><br><span class="k">header </span>${esc(env.h.slice(0, 40))}…<br><span class="k">ct </span>${esc(env.c.slice(0, 120))}${env.c.length > 120 ? '… (' + env.c.length + ' Zeichen)' : ''}`);
           deliver(to, { t: 'msg', from: me, id: m.id, ts, env }); });
         return out(recv, { t: 'ack', id: m.id, ts }); }
       if (m.t === 'receipt') return deliver(m.to, { t: 'receipt', from: me, ids: m.ids, state: m.state });
@@ -103,7 +109,7 @@ window.DemoServer = (() => {
     } };
     return ws;
   }
-  return { connect, reset, register: (name, pub) => { db.users[name] = { pub, token: crypto.randomUUID(), lastSeen: Date.now() - 36e5, about: '' }; } };
+  return { connect, reset };
 })();
 
 const fa = document.getElementById('fa'), fb = document.getElementById('fb');

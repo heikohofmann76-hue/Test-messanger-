@@ -35,15 +35,28 @@ z. B. hinter einem Reverse-Proxy wie Caddy oder über einen Hoster (Render, Fly.
 
 ## Verschlüsselung
 
-- Jedes Gerät erzeugt einen eigenen ECDH-Schlüssel (P-256). Der private Schlüssel ist nicht
-  exportierbar und liegt nur in der IndexedDB des Browsers.
-- Pro Kontakt: ECDH → HKDF-SHA-256 → AES-256-GCM, jede Nachricht mit neuer Zufalls-IV.
-- Gruppen: die Nachricht wird für jedes Mitglied einzeln verschlüsselt.
+Die App nutzt ein Signal-artiges Protokoll (`public/signal.js`), umgesetzt mit WebCrypto:
+
+- **Identität:** Jedes Gerät erzeugt beim ersten Start einen Identitätsschlüssel (ECDH P-256) und
+  einen Signaturschlüssel (ECDSA). Die privaten Schlüssel sind nicht exportierbar und liegen nur in
+  der IndexedDB des Browsers.
+- **Sitzungsaufbau (X3DH):** Jeder Nutzer legt beim Server einen signierten Prekey und einen Vorrat
+  Einmal-Prekeys ab. Wer eine Sitzung startet, holt sich ein Prekey-Bundle und leitet daraus einen
+  gemeinsamen Startschlüssel ab, ohne dass die Gegenseite online sein muss.
+- **Double Ratchet:** Bei jedem Sprecherwechsel ein neuer DH-Schlüssel, für jede Nachricht ein neuer
+  Schlüssel (AES-256-GCM). Alte Schlüssel werden verworfen. Das bringt **Forward Secrecy** (ein
+  geknackter Schlüssel gibt keine alten Nachrichten preis) und **Post-Compromise Security** (nach
+  einem Leck wird die Sitzung von selbst wieder sicher). Nachrichten außer der Reihe funktionieren.
+- **Gruppen:** die Nachricht wird für jedes Mitglied einzeln über dessen Sitzung verschlüsselt.
 - Der Server sieht nur, wer wem wann wie viel schickt. Keinen Inhalt, keine Medien, keinen Status.
 
-**Ehrliche Grenzen des MVP:** Es gibt noch keine Forward Secrecy (kein Double Ratchet wie bei Signal),
-kein Multi-Device, keine Anrufe und kein Backup. Wer die Browserdaten löscht, verliert das Konto auf
-dem Gerät. Nächster Schritt dafür: Umstieg auf das Signal-Protokoll (`libsignal`) oder auf MLS.
+Unterschied zum echten Signal-Protokoll: P-256 statt Curve25519 (in allen Browsern ohne Bibliothek
+verfügbar) und AES-GCM statt AES-CBC+HMAC. Die Krypto-Logik ist mit einer Testreihe abgedeckt
+(beide Richtungen, vertauschte Reihenfolge, abgelehnte Wiederholung, erkannte Manipulation).
+
+**Ehrliche Grenzen des MVP:** kein Multi-Device, keine Anrufe und kein verschlüsseltes Backup. Wer die
+Browserdaten löscht, verliert das Konto auf dem Gerät. Nächste sinnvolle Schritte: Multi-Device und
+ein Matrix-Gateway nach außen.
 
 ## Anbindung an WhatsApp, iMessage und andere Messenger
 
