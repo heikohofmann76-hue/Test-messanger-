@@ -67,7 +67,7 @@ wss.on('connection', (ws) => {
     if (!online.has(name)) online.set(name, new Set());
     online.get(name).add(ws);
     const groups = Object.values(db.groups).filter((g) => g.members.includes(name));
-    send(ws, { t: 'authed', name, groups });
+    send(ws, { t: 'authed', name, groups, opkCount: db.users[name].opks?.length || 0 });
     const q = db.queue[name] || [];
     delete db.queue[name];
     save();
@@ -82,9 +82,11 @@ wss.on('connection', (ws) => {
     if (m.t === 'register') {
       if (!validName(m.name)) return send(ws, { t: 'error', msg: 'Name: 3–24 Zeichen (Buchstaben, Zahlen, _ . -)' });
       if (db.users[m.name]) return send(ws, { t: 'error', msg: 'Name ist schon vergeben' });
-      if (!m.pub || typeof m.pub !== 'object') return send(ws, { t: 'error', msg: 'Kein Schlüssel' });
+      const k = m.keys;
+      if (!k?.ik || !k.sigPub || !k.spk?.pub || !k.spk.sig || !Array.isArray(k.opks)) return send(ws, { t: 'error', msg: 'Schlüssel fehlen' });
       const token = crypto.randomBytes(32).toString('hex');
-      db.users[m.name] = { pub: m.pub, tokenHash: sha(token), lastSeen: Date.now(), about: 'Hey, ich nutze Krypto-Messenger!' };
+      db.users[m.name] = { pub: { ik: k.ik, sigPub: k.sigPub }, spk: k.spk, opks: k.opks.slice(0, 200),
+        tokenHash: sha(token), lastSeen: Date.now(), about: 'Hey, ich nutze Krypto-Messenger!' };
       save();
       send(ws, { t: 'registered', name: m.name, token });
       return login(m.name);
@@ -100,6 +102,20 @@ wss.on('connection', (ws) => {
       case 'lookup': {
         const u = publicUser(m.name);
         return send(ws, u ? { t: 'user', ...u, rid: m.rid } : { t: 'nouser', name: m.name, rid: m.rid });
+      }
+      case 'bundle': {
+        // Prekey-Bundle für den Sitzungsaufbau (X3DH). Jeder Einmal-Prekey wird nur einmal ausgegeben.
+        const u = db.users[m.name];
+        if (!u?.spk) return send(ws, { t: 'nobundle', rid: m.rid });
+        const opk = u.opks.shift() || null;
+        save();
+        if (u.opks.length < 10) toUser(m.name, { t: 'prekeys_low', count: u.opks.length });
+        return send(ws, { t: 'bundle', rid: m.rid, bundle: { ik: u.pub.ik, sigPub: u.pub.sigPub, spk: u.spk, opk } });
+      }
+      case 'prekeys': {
+        const u = db.users[me];
+        if (Array.isArray(m.opks)) { u.opks.push(...m.opks.slice(0, 100)); u.opks = u.opks.slice(-200); save(); }
+        return;
       }
       case 'about': {
         db.users[me].about = String(m.about || '').slice(0, 140); save();

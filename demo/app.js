@@ -1,7 +1,8 @@
 'use strict';
 /* Krypto-Messenger – Client
- * Kryptografie: ECDH P-256 Identitätsschlüssel (privat, nicht exportierbar, nur in IndexedDB)
- * Pro Kontakt: ECDH -> HKDF-SHA256 -> AES-256-GCM. Jede Nachricht bekommt eine neue zufällige IV.
+ * Kryptografie: Signal-artiges Protokoll (X3DH + Double Ratchet) aus signal.js.
+ *   - Identitäts- und Signaturschlüssel pro Gerät, privat und nicht exportierbar, nur in IndexedDB.
+ *   - Forward Secrecy: jede Nachricht hat einen eigenen Schlüssel, alte werden verworfen.
  * Gruppen: Absender verschlüsselt die Nachricht einzeln für jedes Mitglied (Fan-out).
  * Der Server sieht nur Absender, Empfänger, Zeit und Chiffretext.
  */
@@ -49,55 +50,51 @@ const idbUnused = (() => {
 })();
 
 // ---------------- Krypto ----------------
+// Die eigentliche Kryptografie (X3DH + Double Ratchet) steckt in signal.js.
+// Hier liegt nur die Anbindung: Identität erzeugen, Prekeys nachfüllen, Sitzungen speichern.
 const enc = new TextEncoder(), dec = new TextDecoder();
-const toB64 = (buf) => { const b = new Uint8Array(buf); let s = ''; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(s); };
-const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-const keyCache = new Map();
+const toB64 = Signal.toB64, fromB64 = Signal.fromB64;
 
-const Crypto = {
-  async generate() {
-    const kp = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
-    const pub = await crypto.subtle.exportKey('jwk', kp.publicKey);
-    return { priv: kp.privateKey, pub: { kty: pub.kty, crv: pub.crv, x: pub.x, y: pub.y } };
-  },
-  async sharedKey(name, pubJwk) {
-    const ck = name + ':' + pubJwk.x;
-    if (keyCache.has(ck)) return keyCache.get(ck);
-    const p = (async () => {
-      const their = await crypto.subtle.importKey('jwk', pubJwk, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
-      const bits = await crypto.subtle.deriveBits({ name: 'ECDH', public: their }, S.priv, 256);
-      const hk = await crypto.subtle.importKey('raw', bits, 'HKDF', false, ['deriveKey']);
-      const info = enc.encode([S.name, name].sort().join('|'));
-      return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: enc.encode('krypto-messenger-v1'), info },
-        hk, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-    })();
-    keyCache.set(ck, p);
-    return p;
-  },
-  async encrypt(name, pub, obj) {
-    const key = await this.sharedKey(name, pub);
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(obj)));
-    return { iv: toB64(iv), ct: toB64(ct) };
-  },
-  async decrypt(name, pub, env) {
-    const key = await this.sharedKey(name, pub);
-    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(env.iv) }, key, fromB64(env.ct));
-    return JSON.parse(dec.decode(pt));
-  },
-  async safetyNumber(a, pa, b, pb) {
-    const parts = [[a, pa], [b, pb]].sort((x, y) => x[0] < y[0] ? -1 : 1).map(([n, p]) => n + p.x + p.y).join('');
-    const h = new Uint8Array(await crypto.subtle.digest('SHA-512', enc.encode(parts)));
-    const out = [];
-    for (let i = 0; i < 12; i++) out.push(String(((h[i * 3] << 16) | (h[i * 3 + 1] << 8) | h[i * 3 + 2]) % 100000).padStart(5, '0'));
-    return out;
+// Sitzungsspeicher: pro Kontakt eine Liste von Ratchet-Zuständen, in IndexedDB abgelegt.
+const sessionStore = {
+  async loadSessions(peer) { return (await idb.get('sess:' + peer)) || null; },
+  async saveSessions(peer, list) { await idb.set('sess:' + peer, list); },
+  async saveIdentity() { await idb.set('identity', S.identity); },
+  async fetchBundle(peer) {
+    return new Promise((res) => {
+      const rid = uid(); S.pendingLookups[rid] = res;
+      wsSend({ t: 'bundle', name: peer, rid });
+      setTimeout(() => { if (S.pendingLookups[rid]) { delete S.pendingLookups[rid]; res(null); } }, 5000);
+    });
   },
 };
+let ratchet = null; // Signal.createManager(...), nach dem Laden der Identität gesetzt
+
+async function newIdentity() {
+  const id = await Signal.createIdentity();
+  const opks = await Signal.newOneTimePrekeys(id, 20);
+  return { id, keys: { ...Signal.publicIdentity(id), spk: Signal.publicSpk(id), opks } };
+}
+async function topUpPrekeys(target = 20) {
+  const have = Object.keys(S.identity.opks).length;
+  if (have >= target) return;
+  const opks = await Signal.newOneTimePrekeys(S.identity, target - have);
+  await sessionStore.saveIdentity();
+  wsSend({ t: 'prekeys', opks });
+}
+// Sicherheitsnummer aus beiden Identitätsschlüsseln (wie bei Signal „Safety Number“)
+async function safetyNumber(myIk, theirIk) {
+  const parts = [myIk, theirIk].sort().join('|');
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-512', enc.encode(parts)));
+  const out = [];
+  for (let i = 0; i < 12; i++) out.push(String(((h[i * 3] << 16) | (h[i * 3 + 1] << 8) | h[i * 3 + 2]) % 100000).padStart(5, '0'));
+  return out;
+}
 
 // ---------------- Zustand ----------------
 const S = {
-  name: null, token: null, priv: null, pub: null,
-  contacts: {},   // name -> {pub, about, online, lastSeen, keyChanged}
+  name: null, token: null, identity: null,
+  contacts: {},   // name -> {ik, about, online, lastSeen, keyChanged}
   groups: {},     // id -> group
   chats: {},      // chatId -> {id, type:'u'|'g', target, last, unread, typing}
   msgs: {},       // chatId -> [msg]
@@ -159,10 +156,10 @@ function lookup(name) {
   });
 }
 async function ensureContact(name) {
-  if (S.contacts[name]?.pub) return S.contacts[name];
+  if (S.contacts[name]?.ik) return S.contacts[name];
   const u = await lookup(name);
   if (!u) return null;
-  S.contacts[name] = { pub: u.pub, about: u.about, online: u.online, lastSeen: u.lastSeen };
+  S.contacts[name] = { ik: u.pub.ik, about: u.about, online: u.online, lastSeen: u.lastSeen };
   await persist();
   return S.contacts[name];
 }
@@ -170,23 +167,31 @@ async function ensureContact(name) {
 async function handle(m) {
   switch (m.t) {
     case 'registered':
-      S.token = m.token; await idb.set('identity', { name: S.name, token: S.token, priv: S.priv, pub: S.pub });
+      S.token = m.token;
+      await idb.set('account', { name: S.name, token: S.token });
+      await sessionStore.saveIdentity();
       showApp(); break;
     case 'authed':
       setConn(true);
       m.groups.forEach(upsertGroup);
+      if ((m.opkCount ?? 20) < 10) topUpPrekeys();
       if (!$('#app').classList.contains('hidden')) break;
       showApp(); break;
+    case 'prekeys_low': topUpPrekeys(); break;
     case 'autherror':
       $('#authError').textContent = 'Anmeldung fehlgeschlagen. Bitte neues Konto erstellen.';
-      await idb.set('identity', null); showAuth(); break;
+      await idb.set('account', null); await idb.set('identity', null); showAuth(); break;
     case 'error': $('#authError').textContent = m.msg; toast(m.msg); break;
     case 'user': case 'nouser': {
       const r = S.pendingLookups[m.rid]; delete S.pendingLookups[m.rid];
-      if (m.t === 'user' && S.contacts[m.name]?.pub && S.contacts[m.name].pub.x !== m.pub.x) {
-        S.contacts[m.name].keyChanged = true; // Schlüsselwechsel – Nutzer warnen
+      if (m.t === 'user' && S.contacts[m.name]?.ik && S.contacts[m.name].ik !== m.pub.ik) {
+        S.contacts[m.name].keyChanged = true; // Identitätsschlüssel hat sich geändert – Nutzer warnen
       }
       r?.(m.t === 'user' ? m : null); break;
+    }
+    case 'bundle': case 'nobundle': {
+      const r = S.pendingLookups[m.rid]; delete S.pendingLookups[m.rid];
+      r?.(m.t === 'bundle' ? m.bundle : null); break;
     }
     case 'presence': {
       const c = S.contacts[m.name]; if (!c) break;
@@ -229,13 +234,13 @@ function upsertGroup(g) {
 async function onIncoming(m) {
   const c = await ensureContact(m.from);
   if (!c) return;
-  let p;
-  try { p = await Crypto.decrypt(m.from, c.pub, m.env); }
-  catch {
-    // evtl. neuer Schlüssel: neu laden und nochmal versuchen
-    const u = await lookup(m.from);
-    if (u) { c.pub = u.pub; c.keyChanged = true; try { p = await Crypto.decrypt(m.from, c.pub, m.env); } catch {} }
-    if (!p) return console.warn('Entschlüsselung fehlgeschlagen', m.id);
+  let p, res;
+  try { res = await ratchet.decrypt(m.from, m.env); p = res.obj; }
+  catch (e) { return console.warn('Entschlüsselung fehlgeschlagen', m.id, e.message); }
+  // Beim ersten Kontakt den Identitätsschlüssel des Absenders festhalten; ändert er sich später, warnen.
+  if (res.peerIk) {
+    if (!c.ikVerified) { c.ikVerified = res.peerIk; await persist(); }
+    else if (c.ikVerified !== res.peerIk) { c.keyChanged = true; await persist(); }
   }
   wsSend({ t: 'receipt', to: m.from, ids: [m.id], state: 'delivered' });
 
@@ -289,9 +294,9 @@ async function sendPayload(chatId, payload, msgId = uid()) {
   const envs = {};
   for (const n of recipientsOf(chatId)) {
     const c = await ensureContact(n);
-    if (c) envs[n] = await Crypto.encrypt(n, c.pub, payload);
+    if (c) try { envs[n] = await ratchet.encrypt(n, payload); } catch (e) { console.warn('Verschlüsselung für', n, 'fehlgeschlagen', e.message); }
   }
-  wsSend({ t: 'send', id: msgId, envs });
+  if (Object.keys(envs).length) wsSend({ t: 'send', id: msgId, envs });
   return msgId;
 }
 
@@ -619,7 +624,7 @@ async function openSafety() {
     });
   }
   const ct = S.contacts[chat.target];
-  const nums = await Crypto.safetyNumber(S.name, S.pub, chat.target, ct.pub);
+  const nums = await safetyNumber(S.identity.ikPub, ct.ikVerified || ct.ik);
   modal(`<h3>Verschlüsselung prüfen</h3>
     <p class="muted small">Vergleiche diese Nummer mit ${esc(chat.target)}, am besten persönlich oder per Anruf. Stimmt sie überein, ist euer Chat Ende-zu-Ende-verschlüsselt und niemand sitzt dazwischen.</p>
     <div class="safety">${nums.map((n) => `<span>${n}</span>`).join('')}</div>
@@ -662,8 +667,8 @@ function openStatusCompose() {
       S.statuses.push({ id, from: S.name, ts: Date.now(), ...payload });
       const targets = Object.keys(S.contacts).filter((n) => n !== S.name);
       const envs = {};
-      for (const n of targets) envs[n] = await Crypto.encrypt(n, S.contacts[n].pub, payload);
-      wsSend({ t: 'send', id, envs });
+      for (const n of targets) try { envs[n] = await ratchet.encrypt(n, payload); } catch {}
+      if (Object.keys(envs).length) wsSend({ t: 'send', id, envs });
       await persist(); closeModal(); renderStatusList(); toast('Status geteilt');
     };
   });
@@ -705,7 +710,9 @@ async function showApp() {
 
 async function boot() {
   const theme = localStorage.getItem('theme'); if (theme) document.documentElement.dataset.theme = theme;
-  const id = await idb.get('identity');
+  const account = await idb.get('account');
+  S.identity = await idb.get('identity');
+  ratchet = Signal.createManager(() => S.identity, sessionStore);
   S.contacts = (await idb.get('contacts')) || {};
   S.groups = (await idb.get('groups')) || {};
   S.chats = (await idb.get('chats')) || {};
@@ -715,7 +722,7 @@ async function boot() {
   Object.values(S.contacts).forEach((c) => (c.online = false));
   for (const m of await idb.allMsgs()) (S.msgs[m.chat] ||= []).push(m);
   Object.values(S.msgs).forEach((l) => l.sort((a, b) => a.ts - b.ts));
-  if (id?.token) { Object.assign(S, { name: id.name, token: id.token, priv: id.priv, pub: id.pub }); showApp(); }
+  if (account?.token && S.identity) { Object.assign(S, { name: account.name, token: account.token }); showApp(); }
   else showAuth();
   connect();
 
@@ -723,9 +730,9 @@ async function boot() {
     e.preventDefault();
     $('#authError').textContent = '';
     const name = $('#authName').value.trim();
-    const k = await Crypto.generate();
-    Object.assign(S, { name, priv: k.priv, pub: k.pub, token: null });
-    wsSend({ t: 'register', name, pub: k.pub });
+    const { id, keys } = await newIdentity();
+    Object.assign(S, { name, identity: id, token: null });
+    wsSend({ t: 'register', name, keys });
   };
   $('#search').oninput = renderList;
   $('#chatList').onclick = (e) => { const it = e.target.closest('[data-chat]'); if (it) openChat(it.dataset.chat); };
@@ -786,5 +793,5 @@ window.demoReady = new Promise((res) => {
 window.demoOpenChat = async (name) => { await ensureContact(name); const id = 'u:' + name;
   S.chats[id] ||= { id, type: 'u', target: name, unread: 0, last: null }; renderList(); await openChat(id); };
 window.demoSend = (text) => sendMessage({ kind: 'text', text });
-window.demoOpenGroup = async () => { const c = Object.values(S.chats).find((c) => c.type === 'g'); if (c) await openChat(c.id); };
 window.demoCreateGroup = async (name, members) => { for (const n of members) await ensureContact(n); wsSend({ t: 'group_create', name, members }); };
+window.demoOpenGroup = async () => { const c = Object.values(S.chats).find((c) => c.type === 'g'); if (c) await openChat(c.id); };
