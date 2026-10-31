@@ -154,6 +154,11 @@ wss.on('connection', (ws, req) => {
       case 'typing':
         if (Array.isArray(m.to)) m.to.forEach((n) => toUser(n, { t: 'typing', from: me, chat: m.chat }));
         return;
+      case 'signal':
+        // WebRTC-Signaling: kleine Verbindungsdaten (Offer/Answer/ICE) an den Partner weiterreichen.
+        // Nur zustellen, wenn er gerade online ist; Nachrichten selbst laufen danach direkt P2P.
+        if (db.users[m.to]) toUser(m.to, { t: 'signal', from: me, data: m.data });
+        return;
       case 'group_create': {
         const members = [...new Set([me, ...(m.members || [])])].filter((n) => db.users[n]);
         const g = { id: crypto.randomUUID(), name: String(m.name || 'Gruppe').slice(0, 40), members, admin: me, created: Date.now() };
