@@ -169,6 +169,7 @@ async function handle(m) {
       if (!$('#app').classList.contains('hidden')) break;
       showApp(); break;
     case 'prekeys_low': topUpPrekeys(); break;
+    case 'logins': S.logins = m.logins || []; break;
     case 'autherror':
       $('#authError').textContent = 'Anmeldung fehlgeschlagen. Bitte neues Konto erstellen.';
       await idb.set('account', null); await idb.set('identity', null); showAuth(); break;
@@ -625,11 +626,24 @@ async function openSafety() {
   });
 }
 
+// Login-Verlauf (ungefähre Region der letzten Anmeldungen an das eigene Konto)
+function loginHistoryHTML() {
+  const list = S.logins || [];
+  if (!list.length) return '';
+  const rows = list.slice(0, 5).map((l) =>
+    `<div class="check" style="justify-content:space-between"><span>📍 ${esc(l.region)}</span>
+      <span class="muted small">${fmtListTime(l.ts)}</span></div>`).join('');
+  return `<details style="margin-top:4px"><summary class="muted small" style="cursor:pointer">Letzte Anmeldungen (${list.length})</summary>
+    ${rows}
+    <p class="muted small">Ungefähre Region laut IP. Siehst du hier eine Anmeldung, die nicht von dir ist, erstelle ein neues Konto.</p></details>`;
+}
+
 function openProfile() {
   modal(`${avatarHTML(S.name, { cls: 'lg' })}<h3 style="text-align:center">${esc(S.name)}</h3>
     <label class="muted small">Info</label><input id="pfAbout" maxlength="140" value="${esc(S.about || '')}" placeholder="Hey, ich nutze Krypto-Messenger!">
     <label class="check"><input type="checkbox" id="pfNotif" ${('Notification' in window && Notification.permission === 'granted') ? 'checked' : ''}> Benachrichtigungen</label>
     <p class="muted small">🔑 Dein privater Schlüssel liegt nur in diesem Browser. Wenn du die Browserdaten löschst, ist das Konto auf diesem Gerät weg.</p>
+    ${loginHistoryHTML()}
     <div class="actions"><button class="btn" data-close>Schließen</button><button class="btn primary" id="pfSave">Speichern</button></div>`, (c) => {
     c.querySelector('#pfNotif').onchange = (e) => { if (e.target.checked && 'Notification' in window) Notification.requestPermission(); };
     c.querySelector('#pfSave').onclick = async () => {
